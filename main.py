@@ -1,43 +1,39 @@
 from typing import Union
 from fastapi import FastAPI
-from utils import rag_helper
 from contextlib import asynccontextmanager
-from langchain.chains import RetrievalQA
-from langchain_openai import OpenAI
 from dotenv import find_dotenv, load_dotenv
+from engine.store.data_loader import DataLoader
+from engine.ai_chat import AIChat
+from model.user_query import UserQuery
 import os
+import logging
 
-env_file = find_dotenv(".keys")
-load_dotenv(env_file)
+
+logger = logging.getLogger(__name__)
+
 
 # lifespan function
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    print("lifespan init!")
+    logger.info("lifespan() run")
     # run at startup
     # load the pdf at startup and store the docstorage to be used later
-    app.state.doc_storage = rag_helper.load_pdf_doc()
+    env_file = find_dotenv(".keys")
+    load_dotenv(env_file)
+    open_api_key = os.getenv("OPENAI_API_KEY")
+    doc_name = os.getenv("PDF_DOC_NAME")
+    data_loader = DataLoader(api_key=open_api_key, pdf_name=doc_name)
+    app.state.doc_storage = data_loader.get_vector_store()
     yield
 
 
 app = FastAPI(lifespan=lifespan)
 
 
-@app.get("/bot/{query}")
-def ask_bot(query: str):
-    print(f"user query={query}")
-    qa = RetrievalQA.from_chain_type(
-        OpenAI(
-            model_name="gpt-3.5-turbo-instruct",
-            temperature=0,
-            openai_api_key=os.getenv("OPENAI_API_KEY"),
-        ),
-        chain_type="stuff",
-        retriever=app.state.doc_storage.as_retriever(),
-    )
-    resp = qa.invoke(query)
+@app.post("/bot/v1/ask")
+async def ask_bot(user_query: UserQuery):
+    ai_chat = AIChat(app=app)
+    rag_chain = ai_chat.get_llm_rag_chain()
+    resp = rag_chain.invoke(user_query.query)
     return {"response": resp}
-
-
-@app.get("/")
-def read_root():
-    return {"Hello": "World"}
